@@ -1,0 +1,152 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>FX Option Pricer</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;600&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="/static/style.css">
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+</head>
+
+<body>
+    <div class="container">
+        <header>
+            <h1>FX Option Pricer</h1>
+            <p>Vanilla Options with Volatility Surface</p>
+        </header>
+
+        <div class="main-grid">
+            <div class="card input-section">
+                <h2>Market Data</h2>
+
+                <div class="input-group">
+                    <label>Spot Reference</label>
+                    <input type="number" id="spot_ref" value="1.0" step="0.0001">
+                </div>
+
+                <div class="row">
+                    <div class="input-group">
+                        <label>Domestic Rate (r_d)</label>
+                        <input type="number" id="rd" value="0.05" step="0.001">
+                    </div>
+                    <div class="input-group">
+                        <label>Forward Rate (F)</label>
+                        <input type="number" id="forward" value="1.051" step="0.001">
+                    </div>
+                </div>
+
+                <h3>Volatility Surface</h3>
+                <div class="row">
+                    <div class="input-group">
+                        <label>ATM Vol</label>
+                        <input type="number" id="atm" value="0.10" step="0.001">
+                    </div>
+                </div>
+                <div class="row">
+                    <div class="input-group">
+                        <label>25d RR</label>
+                        <input type="number" id="rr25" value="0.01" step="0.001">
+                    </div>
+                    <div class="input-group">
+                        <label>25d ST</label>
+                        <input type="number" id="st25" value="0.002" step="0.001">
+                    </div>
+                </div>
+                <div class="row">
+                    <div class="input-group">
+                        <label>10d RR</label>
+                        <input type="number" id="rr10" value="0.015" step="0.001">
+                    </div>
+                    <div class="input-group">
+                        <label>10d ST</label>
+                        <input type="number" id="st10" value="0.005" step="0.001">
+                    </div>
+                </div>
+            </div>
+
+            <div class="card input-section">
+                <h2>Contract Details</h2>
+                <div class="input-group">
+                    <label>Maturity (Years)</label>
+                    <input type="number" id="T" value="1.0" step="0.01">
+                </div>
+                <div class="input-group">
+                    <label id="strike-label">Strike</label>
+                    <div class="row" style="gap: 0.5rem; margin-bottom: 0;">
+                        <select id="strike-type" style="flex: 0 0 35%;">
+                            <option value="price">Price</option>
+                            <option value="delta">Delta</option>
+                        </select>
+                        <input type="number" id="strike" value="1.0" step="0.0001">
+                    </div>
+                </div>
+                <div class="input-group hidden" id="strike-2-group">
+                    <label>Call Strike (for Strangle)</label>
+                    <input type="number" id="strike_2" value="1.05" step="0.0001">
+                </div>
+                <div class="input-group">
+                    <label>Type</label>
+                    <select id="type">
+                        <option value="call">Call</option>
+                        <option value="put">Put</option>
+                        <option value="strangle">Strangle</option>
+                        <option value="risk_reversal">Risk Reversal</option>
+                    </select>
+                </div>
+
+                <button id="calculate-btn">Price Option</button>
+            </div>
+
+            <div class="card result-section">
+                <h2>Results</h2>
+                <div id="loading" class="hidden">Calculating...</div>
+                <div id="results" class="hidden">
+                    <div class="result-item">
+                        <span class="label">Price</span>
+                        <span class="value" id="res-price">--</span>
+                    </div>
+                    <div class="result-item">
+                        <span class="label">Implied Vol Used</span>
+                        <span class="value" id="res-vol">--</span>
+                    </div>
+                    <div class="result-item">
+                        <span class="label">Strike Used</span>
+                        <span class="value" id="res-strike">--</span>
+                    </div>
+                    <div class="result-item">
+                        <span class="label">ATM Strike</span>
+                        <span class="value" id="res-atm">--</span>
+                    </div>
+                    <div class="result-item">
+                        <span class="label">BS Vega</span>
+                        <span class="value" id="res-vega">--</span>
+                    </div>
+                    <div class="result-item" style="flex-direction: column; align-items: flex-start; gap: 0.5rem;">
+                        <span class="label">Model Vega (Surface Sensitivities)</span>
+                        <div id="res-model-vega" style="font-size: 0.9rem; color: var(--text-secondary); width: 100%;">
+                            --</div>
+                    </div>
+                </div>
+
+            </div>
+
+            <div class="card charts-section">
+                <h2>Charts</h2>
+                <div class="chart-container" style="margin-top: 1.5rem; position: relative; height: 300px;">
+                    <canvas id="volChart"></canvas>
+                </div>
+
+                <div class="chart-container" style="margin-top: 1.5rem; position: relative; height: 300px;">
+                    <canvas id="payoffChart"></canvas>
+                </div>
+            </div>
+        </div>
+    </div>
+    <script src="/static/script.js"></script>
+</body>
+
+</html>

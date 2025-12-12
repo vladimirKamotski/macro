@@ -1,1 +1,3 @@
-google-generativeai
+flask
+numpy
+scipy
