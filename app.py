@@ -2,6 +2,8 @@
 from flask import Flask, render_template, request, jsonify
 import numpy as np
 from pricing import VanillaFxOptionPricer, VolatilitySurface
+from optimization import HedgeOptimizer
+import traceback
 
 app = Flask(__name__)
 
@@ -108,10 +110,16 @@ def calculate():
             vol_put = surface.get_vol(strike)
             vol_call = surface.get_vol(strike_2)
             
+            # Vega-Neutral Weighting
+            w_p, w_c = pricer.calculate_vega_weights(strike, vol_put, strike_2, vol_call)
+            
             p_put = pricer.price(vol_put, strike, 'put')
             p_call = pricer.price(vol_call, strike_2, 'call')
             
-            price = p_call - p_put
+            if option_type == 'risk_reversal':
+                price = w_c * p_call - w_p * p_put
+            else:
+                price = w_c * p_call + w_p * p_put
             
             interp_vol = (vol_put + vol_call) / 2.0
             
@@ -156,8 +164,32 @@ def calculate():
         curve_y = [surface.get_vol(k) for k in curve_x]
         
         # Calculate Sensitivities
-        bs_vega = pricer.calculate_vega(strike, interp_vol)
-        model_sens = pricer.calculate_model_sensitivities(strike, option_type, surface)
+        bs_vega = 0.0
+        bs_gamma = 0.0
+        
+        if option_type == 'strangle':
+            v1 = pricer.calculate_vega(strike, surface.get_vol(strike))
+            v2 = pricer.calculate_vega(strike_2, surface.get_vol(strike_2))
+            w_p, w_c = pricer.calculate_vega_weights(strike, surface.get_vol(strike), strike_2, surface.get_vol(strike_2))
+            bs_vega = w_p * v1 + w_c * v2
+            
+            g1 = pricer.calculate_gamma(strike, surface.get_vol(strike))
+            g2 = pricer.calculate_gamma(strike_2, surface.get_vol(strike_2))
+            bs_gamma = w_p * g1 + w_c * g2
+        elif option_type == 'risk_reversal':
+            v_put = pricer.calculate_vega(strike, surface.get_vol(strike))
+            v_call = pricer.calculate_vega(strike_2, surface.get_vol(strike_2))
+            w_p, w_c = pricer.calculate_vega_weights(strike, surface.get_vol(strike), strike_2, surface.get_vol(strike_2))
+            bs_vega = w_c * v_call - w_p * v_put # Should be ~0 by construction
+            
+            g_put = pricer.calculate_gamma(strike, surface.get_vol(strike))
+            g_call = pricer.calculate_gamma(strike_2, surface.get_vol(strike_2))
+            bs_gamma = w_c * g_call - w_p * g_put
+        else:
+            bs_vega = pricer.calculate_vega(strike, interp_vol)
+            bs_gamma = pricer.calculate_gamma(strike, interp_vol)
+            
+        model_sens = pricer.calculate_model_sensitivities(strike, option_type, surface, strike_2=strike_2)
         
         # Calculate Payoff Curve (at Maturity) vs Spot
         # Use same range as curve_x (strikes) but treated as Spot prices
@@ -193,21 +225,67 @@ def calculate():
             'strike_2_used': strike_2 if strike_2 else None,
             'atm_strike': getattr(surface, 'k_atm', None),
             'vega': bs_vega,
+            'gamma': bs_gamma,
             'model_vega': model_sens,
             'message': 'Priced successfully',
             'plot_data': {
-                'curve_x': curve_x,
-                'curve_y': curve_y,
-                'payoff_x': spot_range,
-                'payoff_y': payoff_y,
-                'points_x': knots_x,
-                'points_y': knots_y,
-                'point_labels': labels
+                'strikes': curve_x,
+                'vols': curve_y,
+                'payoff': payoff_y
             }
         })
 
     except Exception as e:
+        traceback.print_exc()
+        return jsonify({'success': False, 'message': str(e)}), 400
+
+@app.route('/optimize_hedge', methods=['POST'])
+def optimize_hedge():
+    try:
+        data = request.json
+        
+        # 1. Reconstruct Market Objects
+        spot = float(data['spot'])
+        rd = float(data['rd'])
+        forward = float(data['forward'])
+        T = float(data['T'])
+        
+        # Surface params
+        atm = float(data['atm'])
+        rr25 = float(data['rr25'])
+        st25 = float(data['st25'])
+        rr10 = float(data['rr10'])
+        st10 = float(data['st10'])
+        
+        pricer = VanillaFxOptionPricer(spot, rd, forward, T)
+        surface = VolatilitySurface(atm, rr25, st25, rr10, st10)
+        surface.construct_smile(pricer)
+        
+        # 2. Get Inputs
+        # Risk Vector: [atm, rr25, st25, rr10, st10]
+        risk_input = data.get('risk_profile', {}) # dict
+        
+        # Spreads: [atm, rr25, st25, rr10, st10]
+        spreads = data.get('spreads', [])
+        
+        # 3. Optimize
+        optimizer = HedgeOptimizer(pricer, surface)
+        result = optimizer.optimize_hedge(risk_input, spreads)
+        
+        if not result['success']:
+             return jsonify(result), 400
+             
+        # Format for JSON
+        # residual_risk is numpy array, convert to list
+        if 'residual_risk' in result:
+            result['residual_risk'] = result['residual_risk'].tolist()
+            
+        return jsonify(result)
+
+    except Exception as e:
+        traceback.print_exc()
         return jsonify({'success': False, 'message': str(e)}), 400
 
 if __name__ == '__main__':
     app.run(debug=True, port=5001)
+

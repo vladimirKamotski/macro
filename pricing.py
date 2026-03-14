@@ -77,6 +77,32 @@ class VanillaFxOptionPricer:
         else:
             return df_rf * (norm.cdf(d_1) - 1.0)
 
+    def calculate_gamma(self, K, sigma):
+        # Gamma = d^2V / dS^2
+        # Gamma = exp(-rf*T) * N'(d1) / (S * sigma * sqrt(T))
+        if self.T <= 0 or sigma <= 0 or self.S <= 0:
+            return 0.0
+        d_1 = self.d1(K, sigma)
+        df_rf = np.exp(-self.rf * self.T)
+        gamma = df_rf * norm.pdf(d_1) / (self.S * sigma * np.sqrt(self.T))
+        return gamma
+
+    def calculate_vega_weights(self, strike1, vol1, strike2, vol2):
+        # Calculate weights to make a 2-leg strategy vega-neutral
+        # w1 * v1 = w2 * v2
+        # Normalize so (w1 + w2) / 2 = 1.0 (maintains aggregate nominal scale)
+        v1 = self.calculate_vega(strike1, vol1)
+        v2 = self.calculate_vega(strike2, vol2)
+        
+        if v1 <= 0 or v2 <= 0:
+            return 1.0, 1.0
+            
+        # w1/w2 = v2/v1 -> w1 = (v2/v1) * w2
+        # (v2/v1) * w2 + w2 = 2 -> w2(1 + v2/v1) = 2 -> w2 = 2 / (1 + v2/v1)
+        w2 = 2.0 / (1.0 + v2/v1)
+        w1 = 2.0 - w2
+        return w1, w2
+
     def solve_strike_for_delta(self, target_delta, option_type, surface):
         # target_delta: e.g. 0.25
         # option_type: 'call' or 'put'
@@ -143,9 +169,10 @@ class VanillaFxOptionPricer:
         K = self.calculate_forward() / np.exp(log_fk)
         return K
 
-    def calculate_model_sensitivities(self, target_strike, option_type, base_surface):
-        # Calculate sensitivity of Price to each of the 5 surface parameters
+    def calculate_model_sensitivities(self, strike, option_type, base_surface, strike_2=None):
+        # Calculate sensitivity of Strategy Price to each of the 5 surface parameters
         # atm, rr25, st25, rr10, st10
+        # option_type can be 'call', 'put', 'strangle', 'risk_reversal'
         
         params = [
             ('atm', base_surface.sigma_atm),
@@ -158,10 +185,32 @@ class VanillaFxOptionPricer:
         results = {}
         epsilon = 0.0001 # 1 basis point
         
+        # Determine fixed weights for multi-leg strategies based on base surface
+        w_p, w_c = 1.0, 1.0
+        if option_type in ['strangle', 'risk_reversal'] and strike_2 is not None:
+             vol1 = base_surface.get_vol(strike)
+             vol2 = base_surface.get_vol(strike_2)
+             w_p, w_c = self.calculate_vega_weights(strike, vol1, strike_2, vol2)
+
+        def get_strategy_price(p_surface):
+            # Helper to calculate price of the strategy given a surface
+            if option_type == 'strangle':
+                # Put(K1) + Call(K2)
+                vol1 = p_surface.get_vol(strike)
+                vol2 = p_surface.get_vol(strike_2)
+                return w_p * self.price(vol1, strike, 'put') + w_c * self.price(vol2, strike_2, 'call')
+            elif option_type == 'risk_reversal':
+                # Call(K2) - Put(K1)
+                vol1 = p_surface.get_vol(strike)
+                vol2 = p_surface.get_vol(strike_2)
+                return w_c * self.price(vol2, strike_2, 'call') - w_p * self.price(vol1, strike, 'put')
+            else:
+                # Single leg
+                vol = p_surface.get_vol(strike)
+                return self.price(vol, strike, option_type)
+
         # Base Price
-        # We need to get the vol for the target strike using the base surface
-        base_vol = base_surface.get_vol(target_strike)
-        base_price = self.price(base_vol, target_strike, option_type)
+        base_price = get_strategy_price(base_surface)
         
         for name, value in params:
             # Construct perturbed surface
@@ -185,14 +234,12 @@ class VanillaFxOptionPricer:
                 p_args['atm_vol'], p_args['rr_25'], p_args['st_25'], 
                 p_args['rr_10'], p_args['st_10']
             )
-            new_surface.construct_smile(self) # Need pricer to solve strikes
+            new_surface.construct_smile(self)
             
             # New Price
-            new_vol = new_surface.get_vol(target_strike)
-            new_price = self.price(new_vol, target_strike, option_type)
+            new_price = get_strategy_price(new_surface)
             
             # Sensitivity = dPrice / dParam
-            # Finite difference
             sens = (new_price - base_price) / epsilon
             results[name] = sens
             
